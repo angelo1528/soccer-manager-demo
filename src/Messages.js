@@ -1,68 +1,49 @@
 import { useState, useEffect, useRef } from "react";
-import { supabase } from "./supabase";
 
-function Messages({ user }) {
-  console.log("Messages user.id:", user?.id, "user.email:", user?.email);
-  const [players, setPlayers] = useState([]);
+function loadLastReadTimes() {
+  try {
+    return JSON.parse(localStorage.getItem("lastReadTimes") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function Messages({ user, messages, players, archivedPlayers, coachId, onSend, onSendToAll, onDeleteConversation }) {
   const [selectedPlayer, setSelectedPlayer] = useState(null);
-  const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
-  const [coachId, setCoachId] = useState(null);
-  const [archivedPlayers, setArchivedPlayers] = useState([]);
   const [showArchives, setShowArchives] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
-  const [unreadCounts, setUnreadCounts] = useState({});
-  const [lastReadTimes, setLastReadTimes] = useState({});
-  const selectedPlayerRef = useRef(null);
-  const coachIdRef = useRef(null);
+  const [lastReadTimes, setLastReadTimes] = useState(loadLastReadTimes);
   const coachChatRef = useRef(null);
   const playerChatRef = useRef(null);
-  const lastReadTimesRef = useRef(JSON.parse(localStorage.getItem("lastReadTimes") || "{}"));
 
   const isCoach = user?.role === "coach";
 
-  useEffect(() => {
-    selectedPlayerRef.current = selectedPlayer;
-  }, [selectedPlayer]);
+  const conversation = isCoach
+    ? (selectedPlayer ? messages.filter(m =>
+        (m.sender_id === user.id && m.receiver_id === selectedPlayer.id) ||
+        (m.sender_id === selectedPlayer.id && m.receiver_id === user.id)) : [])
+    : messages.filter(m => m.sender_id === user.id || m.receiver_id === user.id);
 
-  useEffect(() => {
-    coachIdRef.current = coachId;
-  }, [coachId]);
-
-  useEffect(() => {
-    if (isCoach) {
-      fetchPlayers();
-      fetchArchivedPlayers();
-      fetchUnreadCounts();
-    } else {
-      fetchCoach();
-      fetchMyMessages();
-    }
-  }, []);
-
-useEffect(() => {
-    if (isCoach && selectedPlayer) {
-      fetchMessages(selectedPlayer.id);
-      const now = new Date().toISOString();
-      lastReadTimesRef.current = { ...lastReadTimesRef.current, [selectedPlayer.id]: now };
-localStorage.setItem("lastReadTimes", JSON.stringify(lastReadTimesRef.current));
-      setUnreadCounts(prev => ({ ...prev, [selectedPlayer.id]: 0 }));
-    }
-  }, [selectedPlayer]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (isCoach) {
-        if (selectedPlayerRef.current) {
-          fetchMessages(selectedPlayerRef.current.id);
-        }
-        fetchUnreadCounts();
-      } else {
-        fetchMyMessages();
+  const unreadCounts = {};
+  if (isCoach) {
+    messages.forEach(msg => {
+      if (msg.receiver_id !== user.id || msg.sender_id === selectedPlayer?.id) return;
+      const lastRead = lastReadTimes[msg.sender_id] || 0;
+      if (new Date(msg.created_at) > new Date(lastRead)) {
+        unreadCounts[msg.sender_id] = (unreadCounts[msg.sender_id] || 0) + 1;
       }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [isCoach]);
+    });
+  }
+
+  useEffect(() => {
+    if (!isCoach || !selectedPlayer) return;
+    setLastReadTimes(prev => {
+      const next = { ...prev, [selectedPlayer.id]: new Date().toISOString() };
+      try { localStorage.setItem("lastReadTimes", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [isCoach, selectedPlayer, messages]);
 
   useEffect(() => {
     if (coachChatRef.current) {
@@ -71,153 +52,25 @@ localStorage.setItem("lastReadTimes", JSON.stringify(lastReadTimesRef.current));
     if (playerChatRef.current) {
       playerChatRef.current.scrollTop = playerChatRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [conversation.length, selectedPlayer]);
 
-  async function fetchPlayers() {
-    const { data: coachTeams } = await supabase
-      .from("teams")
-      .select("id")
-      .eq("coach_id", user.id);
-
-    if (!coachTeams || coachTeams.length === 0) {
-      setPlayers([]);
-      return;
-    }
-
-    const teamIds = coachTeams.map(t => t.id);
-    
-
-    const { data: teamPlayers } = await supabase
-      .from("team_players")
-      .select("email, name")
-      .in("team_id", teamIds);
-
-    if (!teamPlayers) { setPlayers([]); return; }
-
-    const emails = [...new Set(teamPlayers.map(p => p.email))];
-
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .in("email", emails)
-      .eq("archived", false);
-
-    const seen = new Set();
-    const unique = (data || []).filter(p => {
-      if (seen.has(p.email)) return false;
-      seen.add(p.email);
-      return true;
-    });
-    setPlayers(unique);
-  }
-
-  async function fetchArchivedPlayers() {
-    const { data } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("role", "player")
-      .eq("archived", true);
-    setArchivedPlayers(data || []);
-  }
-
-
-
-async function fetchUnreadCounts() {
-    const { data } = await supabase
-      .from("messages")
-      .select("sender_id, created_at")
-      .eq("receiver_id", user.id);
-    
-    const counts = {};
-    (data || []).forEach(msg => {
-      const lastRead = lastReadTimesRef.current[msg.sender_id] || 0;
-      if (new Date(msg.created_at) > new Date(lastRead)) {
-        counts[msg.sender_id] = (counts[msg.sender_id] || 0) + 1;
-      }
-    });
-    setUnreadCounts(counts);
-  }
-
-
-  
-  async function fetchCoach() {
-    const { data: tp } = await supabase
-      .from("team_players")
-      .select("team_id")
-      .eq("email", user.email)
-      .single();
-    if (!tp) return;
-
-    const { data: team } = await supabase
-      .from("teams")
-      .select("coach_id")
-      .eq("id", tp.team_id)
-      .single();
-    if (team) {
-      setCoachId(team.coach_id);
-      coachIdRef.current = team.coach_id;
-    }
-  }
-
-  async function fetchMyMessages() {
-    const { data } = await supabase
-      .from("messages")
-      .select("*")
-      .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
-      .order("created_at", { ascending: true });
-    setMessages(data || []);
-  }
-
-  async function fetchMessages(playerId) {
-    const { data } = await supabase
-      .from("messages")
-      .select("*")
-      .or(
-        `and(sender_id.eq.${user.id},receiver_id.eq.${playerId}),and(sender_id.eq.${playerId},receiver_id.eq.${user.id})`
-      )
-      .order("created_at", { ascending: true });
-    setMessages(data || []);
-  }
-
-  async function deleteConversation(player) {
-    const { error } = await supabase
-      .from("messages")
-      .delete()
-      .or(`and(sender_id.eq.${user.id},receiver_id.eq.${player.id}),and(sender_id.eq.${player.id},receiver_id.eq.${user.id})`);
-    if (!error && selectedPlayer?.id === player.id) {
-      setMessages([]);
-    }
-    setConfirmDelete(null);
-  }
-
-  async function sendMessage() {
+  function sendMessage() {
     if (newMessage === "") return;
-    const receiverId = isCoach ? selectedPlayer?.id : coachIdRef.current;
-        console.log("sendMessage receiverId:", receiverId, "sender:", user.id);
+    const receiverId = isCoach ? selectedPlayer?.id : coachId;
     if (!receiverId) return;
-    const { error } = await supabase.from("messages").insert({
-      sender_id: user.id,
-      receiver_id: receiverId,
-      content: newMessage
-    });
-    if (!error) {
-      setNewMessage("");
-      if (isCoach && selectedPlayer) fetchMessages(selectedPlayer.id);
-      else fetchMyMessages();
-    }
+    onSend(receiverId, newMessage);
+    setNewMessage("");
   }
 
-  async function sendToAll() {
+  function sendToAll() {
     if (newMessage === "") return;
-    for (const player of players) {
-      await supabase.from("messages").insert({
-        sender_id: user.id,
-        receiver_id: player.id,
-        content: `[TO ALL] ${newMessage}`
-      });
-    }
+    onSendToAll(players.map(p => p.id), `[TO ALL] ${newMessage}`);
     setNewMessage("");
-    if (selectedPlayer) fetchMessages(selectedPlayer.id);
+  }
+
+  function deleteConversation(player) {
+    onDeleteConversation(player.id);
+    setConfirmDelete(null);
   }
 
   if (!isCoach) {
@@ -225,12 +78,12 @@ async function fetchUnreadCounts() {
       <div style={{ padding: "20px", maxWidth: "700px" }}>
         <h1>Messages</h1>
         <div ref={playerChatRef} style={{ height: "400px", overflowY: "auto", background: "#f9f9f9", borderRadius: "8px", padding: "16px", marginBottom: "12px" }}>
-          {messages.length === 0 && <p style={{ color: "#999" }}>No messages yet. Your coach will message you here.</p>}
-          {messages.map((msg) => (
-            <div style={{ display: "flex", justifyContent: msg.sender_id === user.id ? "flex-end" : "flex-start", marginBottom: "10px", width: "100%", boxSizing: "border-box" }}>
-              <div style={{ background: msg.sender_id === user.id ? "#4434d3" : "white", color: msg.sender_id === user.id ? "white" : "black", padding: "10px 14px", borderRadius: "12px", maxWidth: "85%", boxShadow: "0 1px 4px rgba(0,0,0,0.1)", wordBreak: "break-all", overflowWrap: "break-word" }}>
+          {conversation.length === 0 && <p style={{ color: "#999" }}>No messages yet. Your coach will message you here.</p>}
+          {conversation.map((msg) => (
+            <div key={msg.id} style={{ display: "flex", justifyContent: msg.sender_id === user.id ? "flex-end" : "flex-start", marginBottom: "10px", width: "100%", boxSizing: "border-box" }}>
+              <div style={{ background: msg.sender_id === user.id ? "#4434d3" : "white", color: msg.sender_id === user.id ? "white" : "black", padding: "10px 14px", borderRadius: "12px", maxWidth: "85%", boxShadow: "0 1px 4px rgba(0,0,0,0.1)", wordBreak: "break-word", overflowWrap: "break-word" }}>
                 <div style={{ fontSize: "11px", color: msg.sender_id === user.id ? "rgba(255,255,255,0.7)" : "#999", marginBottom: "4px" }}>
-                  {msg.sender_id === user.id ? "You" : "Coach"}
+                  {msg.sender_id === user.id ? "You" : msg.content.startsWith("[TO ALL]") ? "Coach · 📢 Team" : "Coach"}
                 </div>
                 {msg.content.startsWith("[TO ALL]") ? msg.content.replace("[TO ALL] ", "") : msg.content}
               </div>
@@ -257,6 +110,7 @@ async function fetchUnreadCounts() {
 <div style={{ display: "flex", gap: "20px", flexDirection: window.innerWidth < 600 ? "column" : "row" }}>
         <div style={{ width: window.innerWidth < 600 ? "100%" : "200px" }}>
           <h3>Players</h3>
+          {players.length === 0 && <p style={{ color: "#999", fontSize: "13px" }}>No players yet. Add some in the Roster tab.</p>}
           {players.map((player) => (
             <div key={player.id} style={{ display: "flex", alignItems: "center", marginBottom: "6px", gap: "6px" }}>
               <div onClick={() => setSelectedPlayer(player)} style={{ flex: 1, padding: "10px", background: selectedPlayer?.id === player.id ? "#4434d3" : "#f0f0f0", color: selectedPlayer?.id === player.id ? "white" : "black", borderRadius: "6px", cursor: "pointer", fontWeight: "500", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -279,7 +133,7 @@ async function fetchUnreadCounts() {
               <div style={{ marginTop: "8px" }}>
                 {archivedPlayers.length === 0 && <p style={{ color: "#999", fontSize: "13px" }}>No archived players.</p>}
                 {archivedPlayers.map((player) => (
-                  <div key={player.id} onClick={() => setSelectedPlayer(player)} style={{ padding: "10px", marginBottom: "6px", background: selectedPlayer?.id === player.id ? "#888" : "#e8e8e8", color: selectedPlayer?.id === player.id ? "white" : "#555", borderRadius: "6px", cursor: "pointer", fontWeight: "500", fontSize: "14px", fontStyle: "italic" }}>
+                  <div key={player.id} onClick={() => setSelectedPlayer({ ...player, archived: true })} style={{ padding: "10px", marginBottom: "6px", background: selectedPlayer?.id === player.id ? "#888" : "#e8e8e8", color: selectedPlayer?.id === player.id ? "white" : "#555", borderRadius: "6px", cursor: "pointer", fontWeight: "500", fontSize: "14px", fontStyle: "italic" }}>
                     {player.name}
                   </div>
                 ))}
@@ -294,9 +148,9 @@ async function fetchUnreadCounts() {
             <>
               <h3>Conversation with {selectedPlayer.name}</h3>
               <div ref={coachChatRef} style={{ height: "400px", overflowY: "auto", background: "#f9f9f9", borderRadius: "8px", padding: "16px", marginBottom: "12px" }}>
-                {messages.length === 0 && <p style={{ color: "#999" }}>No messages yet.</p>}
-                {messages.map((msg) => (
-                  <div style={{ display: "flex", justifyContent: msg.sender_id === user.id ? "flex-end" : "flex-start", marginBottom: "10px", width: "100%", boxSizing: "border-box" }}>
+                {conversation.length === 0 && <p style={{ color: "#999" }}>No messages yet.</p>}
+                {conversation.map((msg) => (
+                  <div key={msg.id} style={{ display: "flex", justifyContent: msg.sender_id === user.id ? "flex-end" : "flex-start", marginBottom: "10px", width: "100%", boxSizing: "border-box" }}>
                     <div style={{ background: msg.sender_id === user.id ? "#4434d3" : "white", color: msg.sender_id === user.id ? "white" : "black", padding: "10px 14px", borderRadius: "12px", maxWidth: "85%", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" }}>
                       <div style={{ fontSize: "11px", color: msg.sender_id === user.id ? "rgba(255,255,255,0.7)" : "#999", marginBottom: "4px" }}>
                         {msg.sender_id === user.id ? "You" : selectedPlayer.name}
@@ -306,17 +160,21 @@ async function fetchUnreadCounts() {
                   </div>
                 ))}
               </div>
-              <div style={{ display: "flex", gap: "8px" }}>
-                <input
-                  placeholder="Type a message..."
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                  style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
-                />
-                <button onClick={sendMessage} style={{ padding: "10px 20px", background: "#4434d3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Send</button>
-                <button onClick={sendToAll} style={{ padding: "10px 20px", background: "#e67e22", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "600" }}>📢 All</button>
-              </div>
+              {selectedPlayer.archived ? (
+                <p style={{ color: "#999", fontSize: "13px" }}>This player was removed from the roster. Conversation is read-only.</p>
+              ) : (
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <input
+                    placeholder="Type a message..."
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+                    style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc", minWidth: "140px" }}
+                  />
+                  <button onClick={sendMessage} style={{ padding: "10px 20px", background: "#4434d3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Send</button>
+                  <button onClick={sendToAll} title="Send to every player" style={{ padding: "10px 20px", background: "#e67e22", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "600" }}>📢 All</button>
+                </div>
+              )}
             </>
           )}
         </div>

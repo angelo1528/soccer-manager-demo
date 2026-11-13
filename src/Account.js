@@ -1,28 +1,16 @@
 import { useState } from "react";
-import { supabase } from "./supabase";
 
-function Account({ user, onLogout, onChangePage, onUpdateUser }) {
+function Account({ user, onLogout, onUpdateUser, onResetDemo }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(user.name);
   const [message, setMessage] = useState("");
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  async function saveName() {
-    const { error } = await supabase
-      .from("profiles")
-      .update({ name })
-      .eq("id", user.id);
-    if (error) {
-      setMessage("Failed to update name.");
-    } else {
-      onUpdateUser({ ...user, name });
-      setMessage("Name updated!");
-      setEditing(false);
-    }
-  }
-
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    onLogout();
+  function saveName() {
+    if (!name.trim()) return;
+    onUpdateUser({ ...user, name });
+    setMessage("Name updated!");
+    setEditing(false);
   }
 
   return (
@@ -51,25 +39,28 @@ function Account({ user, onLogout, onChangePage, onUpdateUser }) {
           )}
         </div>
         <p><strong>Email:</strong> {user.email}</p>
-        <p><strong>Role:</strong> {user.role === "coach" ? "🏆 Coach" : " Player"}</p>
+        <p><strong>Role:</strong> {user.role === "coach" ? "🏆 Manager" : "🏃 Player"}</p>
         {message && <p style={{ color: "green", fontSize: "13px" }}>{message}</p>}
       </div>
 
-      <div
-        onClick={() => onChangePage("changePassword")}
-        style={{ background: "#f9f9f9", padding: "16px", borderRadius: "8px", marginBottom: "12px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
-        onMouseEnter={(e) => e.currentTarget.style.background = "#e8e8e8"}
-        onMouseLeave={(e) => e.currentTarget.style.background = "#f9f9f9"}
-      >
-        <span style={{ fontWeight: "500" }}>🔒 Change Password</span>
-        <span style={{ color: "#999" }}>→</span>
+      <div style={{ background: "#fff8e1", padding: "16px", borderRadius: "8px", marginBottom: "12px", fontSize: "14px", color: "#555" }}>
+        🧪 This is a demo. Your changes are saved in this browser only.
+        {!confirmReset ? (
+          <div onClick={() => setConfirmReset(true)} style={{ marginTop: "10px", color: "#4434d3", fontWeight: "600", cursor: "pointer" }}>↺ Reset demo data</div>
+        ) : (
+          <div style={{ marginTop: "10px", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+            <span>Restore the original sample data?</span>
+            <button onClick={() => { onResetDemo(); setConfirmReset(false); }} style={{ padding: "4px 10px", background: "#4434d3", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>Reset</button>
+            <button onClick={() => setConfirmReset(false)} style={{ padding: "4px 10px", background: "#ccc", border: "none", borderRadius: "4px", cursor: "pointer" }}>Cancel</button>
+          </div>
+        )}
       </div>
 
       <button
-        onClick={handleLogout}
+        onClick={onLogout}
         style={{ width: "100%", padding: "12px", background: "red", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "600", fontSize: "16px" }}
       >
-        Log Out
+        Switch Role
       </button>
     </div>
   );
